@@ -30,7 +30,7 @@ from argparse import ArgumentParser
 
 try:
 	from PySide6.QtCore import Qt, QTimer
-	from PySide6.QtGui import QFont, QPalette, QColor, QAction
+	from PySide6.QtGui import QFont, QPalette, QColor, QAction, QIcon
 	from PySide6.QtWidgets import (
 		QApplication,
 		QLabel,
@@ -41,6 +41,7 @@ try:
 		QPushButton,
 		QMenu,
 		QMessageBox,
+		QSystemTrayIcon,
 	)
 except ImportError as e:  # Graceful message if dependency missing
 	print("PySide6 is not installed. Install dependencies with: pip install -r requirements.txt", file=sys.stderr)
@@ -74,8 +75,7 @@ class MainWindow(QMainWindow):
 		self._pulse_direction = 1
 		self._pulse_value = 0
 		self.setWindowTitle(APP_TITLE)
-		self.setMinimumWidth(520 if not compact else 400)
-		self.setMinimumHeight(260 if not compact else 180)
+		self.setFixedSize(520 if not compact else 400, 260 if not compact else 180)
 		self._build_ui(compact)
 		self._apply_styles()
 		self._init_timers()
@@ -127,10 +127,10 @@ class MainWindow(QMainWindow):
 		btn_row.setSpacing(8)
 		btn_row.addStretch(1)
 
-		self.reset_btn = QPushButton("Reset (R)")
-		self.reset_btn.clicked.connect(self.confirm_reset)
-		self.reset_btn.setCursor(Qt.PointingHandCursor)
-		btn_row.addWidget(self.reset_btn)
+		self.minimize_btn = QPushButton("Hide to Tray")
+		self.minimize_btn.clicked.connect(self.minimize_to_tray)
+		self.minimize_btn.setCursor(Qt.PointingHandCursor)
+		btn_row.addWidget(self.minimize_btn)
 
 		self.always_on_top_btn = QPushButton("Stay On Top")
 		self.always_on_top_btn.setCheckable(True)
@@ -148,11 +148,14 @@ class MainWindow(QMainWindow):
 		central.setLayout(main_layout)
 		self.setCentralWidget(central)
 
+		# System tray setup
+		self._setup_system_tray()
+
 		# Shortcuts
-		self.reset_action = QAction("Reset", self)
-		self.reset_action.setShortcut("R")
-		self.reset_action.triggered.connect(self.confirm_reset)
-		self.addAction(self.reset_action)
+		self.minimize_action = QAction("Hide to Tray", self)
+		self.minimize_action.setShortcut("H")
+		self.minimize_action.triggered.connect(self.minimize_to_tray)
+		self.addAction(self.minimize_action)
 
 	# Styling ----------------------------------------------------------
 	def _apply_styles(self):
@@ -227,18 +230,50 @@ class MainWindow(QMainWindow):
 		for lbl in self._number_labels:
 			lbl.setStyleSheet(f"color: {color}; letter-spacing: 2px;")
 
+	# System Tray Setup -----------------------------------------------
+	def _setup_system_tray(self):
+		if not QSystemTrayIcon.isSystemTrayAvailable():
+			return  # Skip tray setup if not supported
+
+		# Create tray icon (using default application icon)
+		self.tray_icon = QSystemTrayIcon(self)
+		self.tray_icon.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon))
+		self.tray_icon.setToolTip(APP_TITLE)
+
+		# Create tray menu
+		tray_menu = QMenu()
+		show_action = tray_menu.addAction("Show")
+		show_action.triggered.connect(self.show_from_tray)
+		tray_menu.addSeparator()
+		quit_action = tray_menu.addAction("Exit")
+		quit_action.triggered.connect(QApplication.quit)
+
+		self.tray_icon.setContextMenu(tray_menu)
+		self.tray_icon.activated.connect(self._on_tray_activated)
+		self.tray_icon.show()
+
 	# Actions ----------------------------------------------------------
-	def confirm_reset(self):
-		resp = QMessageBox.question(
-			self,
-			"Reset Timer",
-			"Reset elapsed time to 0? This doesn't affect any stored data (none is stored).",
-			QMessageBox.Yes | QMessageBox.No,
-			QMessageBox.No,
-		)
-		if resp == QMessageBox.Yes:
-			self.start_epoch = time.time()
-			self._update()
+	def minimize_to_tray(self):
+		if hasattr(self, 'tray_icon') and QSystemTrayIcon.isSystemTrayAvailable():
+			self.hide()
+			self.tray_icon.showMessage(
+				APP_TITLE,
+				"Application minimized to tray. Right-click tray icon to restore.",
+				QSystemTrayIcon.Information,
+				2000
+			)
+		else:
+			# Fallback to regular minimize if tray not available
+			self.showMinimized()
+
+	def show_from_tray(self):
+		self.show()
+		self.raise_()
+		self.activateWindow()
+
+	def _on_tray_activated(self, reason):
+		if reason == QSystemTrayIcon.DoubleClick:
+			self.show_from_tray()
 
 	def toggle_on_top(self):
 		if self.always_on_top_btn.isChecked():
